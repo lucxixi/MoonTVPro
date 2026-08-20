@@ -32,6 +32,9 @@ export interface Favorite {
   origin?: 'vod' | 'live';
   is_completed?: boolean; // 是否已完结
   vod_remarks?: string; // 视频备注信息
+  shelf_status?: 'want' | 'watching' | 'completed' | 'paused' | 'treasured';
+  personal_rating?: 'like' | 'neutral' | 'dislike';
+  personal_note?: string;
 }
 
 // 存储接口
