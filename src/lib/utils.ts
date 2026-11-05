@@ -2,13 +2,14 @@
 import bs58 from 'bs58';
 import he from 'he';
 
+import { getTmdbImageBaseUrl } from './tmdb-image-base';
+
 export type DoubanImageProxyType =
   | 'direct'
   | 'server'
   | 'img3'
   | 'cmliussss-cdn-tencent'
   | 'cmliussss-cdn-ali'
-  | 'baidu'
   | 'custom';
 
 function normalizeDoubanImageProxyConfig(
@@ -53,10 +54,6 @@ function buildDoubanImageUrl(
         /img\d+\.doubanio\.com/g,
         'img.doubanio.cmliussss.com'
       );
-    case 'baidu':
-      return `https://image.baidu.com/search/down?url=${encodeURIComponent(
-        originalUrl
-      )}`;
     case 'custom':
       return proxyUrl
         ? `${proxyUrl}${encodeURIComponent(originalUrl)}`
@@ -296,10 +293,15 @@ export function clearBangumiImageProbeCache(): void {
   };
 }
 
-export function clearBangumiImageFallbackCache(): void {
+/** 仅清除 localStorage 中的 sticky 降级标记，不动内存探测缓存（热路径调用） */
+function clearBangumiImageFallbackFlags(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(BANGUMI_IMAGE_FALLBACK_UNTIL_KEY);
   localStorage.removeItem(BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY);
+}
+
+export function clearBangumiImageFallbackCache(): void {
+  clearBangumiImageFallbackFlags();
   clearBangumiImageProbeCache();
 }
 
@@ -447,13 +449,13 @@ function isBangumiImageFallbackActive(): boolean {
 
   const until = Number(localStorage.getItem(BANGUMI_IMAGE_FALLBACK_UNTIL_KEY));
   if (!until || Date.now() >= until) {
-    clearBangumiImageFallbackCache();
+    clearBangumiImageFallbackFlags();
     return false;
   }
 
   const signature = localStorage.getItem(BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY);
   if (signature !== getBangumiImageFallbackSignature()) {
-    clearBangumiImageFallbackCache();
+    clearBangumiImageFallbackFlags();
     return false;
   }
 
@@ -573,11 +575,24 @@ export function processImageUrl(originalUrl: string): string {
   // 处理 TMDB 图片 URL 替换
   if (originalUrl.includes('image.tmdb.org')) {
     if (typeof window !== 'undefined') {
-      const tmdbImageBaseUrl =
-        localStorage.getItem('tmdbImageBaseUrl') || 'https://image.tmdb.org';
-      // 只有当用户设置了不同的 baseUrl 时才进行替换
+      const tmdbImageBaseUrl = getTmdbImageBaseUrl();
+      // 与默认地址一致时无需替换
       if (tmdbImageBaseUrl !== 'https://image.tmdb.org') {
-        return originalUrl.replace('https://image.tmdb.org', tmdbImageBaseUrl);
+        // 已带有配置的图片前缀时直接返回，避免重复嵌套拼接
+        if (originalUrl.startsWith(tmdbImageBaseUrl)) {
+          return originalUrl;
+        }
+        // 仅替换开头的官方图片地址，避免对已拼接的 URL 再次追加前缀
+        for (const officialBase of [
+          'https://image.tmdb.org',
+          'http://image.tmdb.org',
+        ]) {
+          if (originalUrl.startsWith(officialBase)) {
+            return (
+              tmdbImageBaseUrl + originalUrl.slice(officialBase.length)
+            );
+          }
+        }
       }
     }
     return originalUrl;
@@ -669,6 +684,22 @@ export function processVideoUrl(originalUrl: string): string {
 }
 
 /**
+ * 测速失败类型：
+ * - timeout：源可达但在超时窗口内没能拿到元数据/首片（太慢）
+ * - unreachable：网络错误、CORS、404、HLS 解析失败等，源无法访问
+ */
+export type SpeedTestErrorType = 'timeout' | 'unreachable';
+
+export class SpeedTestError extends Error {
+  type: SpeedTestErrorType;
+  constructor(type: SpeedTestErrorType, message: string) {
+    super(message);
+    this.name = 'SpeedTestError';
+    this.type = type;
+  }
+}
+
+/**
  * 从m3u8地址获取视频质量等级和网络信息
  * @param m3u8Url m3u8播放列表的URL
  * @returns Promise<{quality: string, loadSpeed: string, pingTime: number, bitrate: string}> 视频质量等级和网络信息
@@ -755,7 +786,9 @@ export async function getVideoResolutionFromM3u8(
         } else {
           hls.destroy();
           video.remove();
-          reject(new Error('Timeout loading video metadata'));
+          reject(
+            new SpeedTestError('timeout', 'Timeout loading video metadata')
+          );
         }
       }, timeoutMs);
 
@@ -763,7 +796,9 @@ export async function getVideoResolutionFromM3u8(
         clearTimeout(timeout);
         hls.destroy();
         video.remove();
-        reject(new Error('Failed to load video metadata'));
+        reject(
+          new SpeedTestError('unreachable', 'Failed to load video metadata')
+        );
       };
 
       let fragmentStartTime = 0;
@@ -872,7 +907,17 @@ export async function getVideoResolutionFromM3u8(
           clearTimeout(timeout);
           hls.destroy();
           video.remove();
-          reject(new Error(`HLS播放失败: ${data.type}`));
+          // HLS 的 *TimeOut 类 details（manifestLoadTimeOut 等）归为超时，
+          // 其余致命错误（网络不可达、404、解析失败）归为无法访问
+          const details =
+            typeof data.details === 'string' ? data.details : '';
+          const isTimeout = details.toLowerCase().includes('timeout');
+          reject(
+            new SpeedTestError(
+              isTimeout ? 'timeout' : 'unreachable',
+              `HLS播放失败: ${data.type}`
+            )
+          );
         }
       });
 
