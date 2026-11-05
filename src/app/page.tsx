@@ -654,6 +654,7 @@ function HomeClient() {
                         year={duanju.year}
                         type='tv'
                         from='search'
+                        isDuanju
                         source_name={duanju.source_name}
                         episodes={duanju.episodes?.length}
                         douban_id={duanju.douban_id}
@@ -797,7 +798,7 @@ function HomeClient() {
                 热门综艺
               </h2>
               <Link
-                href='/douban?type=tv&category=show'
+                href='/douban?type=show'
                 className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
               >
                 查看更多

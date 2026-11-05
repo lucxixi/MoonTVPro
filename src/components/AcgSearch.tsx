@@ -4,6 +4,7 @@
 import {
   Activity,
   AlertCircle,
+  Copy,
   Download,
   ExternalLink,
   Loader2,
@@ -11,6 +12,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
+import OpenListSourceSelect from '@/components/OpenListSourceSelect';
 import Toast, { ToastProps } from '@/components/Toast';
 
 interface AcgSearchItem {
@@ -121,10 +123,13 @@ export default function AcgSearch({
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [copyingId, setCopyingId] = useState<string | null>(null);
   const [showNameDialog, setShowNameDialog] = useState(false);
   const [selectedItem, setSelectedItem] = useState<AcgSearchItem | null>(null);
   const [customName, setCustomName] = useState('');
   const [downloadTool, setDownloadTool] = useState<DownloadTool>('aria2');
+  const [downloadSource, setDownloadSource] = useState('');
+  const [downloadPath, setDownloadPath] = useState('');
   const [toast, setToast] = useState<ToastProps | null>(null);
   const [healthMap, setHealthMap] = useState<Record<string, MagnetHealthView>>(
     {}
@@ -462,6 +467,8 @@ export default function AcgSearch({
           url: selectedItem.torrentUrl,
           name: customName.trim(),
           tool: downloadTool,
+          source: downloadSource || undefined,
+          path: downloadPath.trim() || undefined,
         }),
       });
 
@@ -472,7 +479,9 @@ export default function AcgSearch({
       }
 
       setToast({
-        message: data.message || '已添加到离线下载队列',
+        message: data.path
+          ? `${data.message || '已添加到离线下载队列'}：${data.path}`
+          : data.message || '已添加到离线下载队列',
         type: 'success',
         onClose: () => setToast(null),
       });
@@ -487,6 +496,33 @@ export default function AcgSearch({
       setSelectedItem(null);
       setCustomName('');
       setDownloadTool('aria2');
+      setDownloadSource('');
+      setDownloadPath('');
+    }
+  };
+
+  // 复制磁链：原样复制 RSS 里的链接（磁链复制磁链，.torrent 复制 .torrent），纯前端不走服务器
+  const handleCopyMagnet = async (item: AcgSearchItem, index: number) => {
+    const itemId = getAcgItemId(item, index);
+    const link = item.torrentUrl || item.link;
+    if (!link || copyingId === itemId) return;
+
+    setCopyingId(itemId);
+    try {
+      await navigator.clipboard.writeText(link);
+      setToast({
+        message: '链接已复制',
+        type: 'success',
+        onClose: () => setToast(null),
+      });
+    } catch (err: any) {
+      setToast({
+        message: err.message || '复制失败',
+        type: 'error',
+        onClose: () => setToast(null),
+      });
+    } finally {
+      setCopyingId(null);
     }
   };
 
@@ -635,6 +671,19 @@ export default function AcgSearch({
                     </>
                   )}
                 </button>
+                <button
+                  onClick={() => handleCopyMagnet(item, index)}
+                  disabled={(!item.torrentUrl && !item.link) || copyingId === itemId}
+                  className='flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-gray-200 text-gray-700 text-sm hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors'
+                  title='复制磁链'
+                >
+                  {copyingId === itemId ? (
+                    <Loader2 className='h-4 w-4 animate-spin' />
+                  ) : (
+                    <Copy className='h-4 w-4' />
+                  )}
+                  <span>复制磁链</span>
+                </button>
                 <a
                   href={item.link || item.torrentUrl || '#'}
                   target='_blank'
@@ -695,6 +744,23 @@ export default function AcgSearch({
                   </option>
                 ))}
               </select>
+              <OpenListSourceSelect
+                value={downloadSource}
+                onChange={setDownloadSource}
+              />
+              <label className='mt-4 block text-sm font-medium text-gray-700 dark:text-gray-300'>
+                覆盖路径
+              </label>
+              <input
+                type='text'
+                value={downloadPath}
+                onChange={(e) => setDownloadPath(e.target.value)}
+                placeholder='留空使用离线下载目录'
+                className='mt-1 w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-green-500'
+              />
+              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                可选；最终保存到「该目录/资源名称」
+              </p>
               <div className='mt-4 flex gap-2 justify-end'>
                 <button
                   onClick={() => {
@@ -702,6 +768,8 @@ export default function AcgSearch({
                     setSelectedItem(null);
                     setCustomName('');
                     setDownloadTool('aria2');
+                    setDownloadSource('');
+                    setDownloadPath('');
                   }}
                   className='px-4 py-2 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 transition-colors'
                 >
